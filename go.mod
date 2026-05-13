@@ -1,4 +1,4 @@
-module my-order-system
+module github.com/AlexW6385/Distributed-Order-Processing-System
 
 go 1.25.0
 

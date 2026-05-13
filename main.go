@@ -17,7 +17,7 @@ type app struct {
 }
 
 func main() {
-	databaseURL := getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/my_order_system?sslmode=disable")
+	databaseURL := getenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/distributed_order_processing_system?sslmode=disable")
 	port := getenv("PORT", "8080")
 
 	db, err := openDB(databaseURL)
