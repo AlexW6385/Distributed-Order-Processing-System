@@ -64,6 +64,10 @@ func openDB(databaseURL string) (*sql.DB, error) {
 func (a *app) routes() http.Handler {
 	router := gin.Default()
 	router.GET("/health", a.healthCheck)
+	router.GET("/products", a.listProducts)
+	router.POST("/orders", a.createOrder)
+	router.GET("/orders/:id", a.getOrder)
+	router.POST("/orders/:id/pay", a.payOrder)
 	return router
 }
 
