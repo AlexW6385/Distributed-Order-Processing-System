@@ -51,4 +51,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/distributed_order_processing_system_test?sslmode=disable
           TEST_REDIS_ADDR: localhost:6379
-        run: go test ./...
+        run: go test -p 1 ./...
+
+      - name: Build service images
+        run: docker compose build order-service product-service payment-service

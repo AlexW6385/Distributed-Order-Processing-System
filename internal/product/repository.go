@@ -49,3 +49,22 @@ func (r *Repository) List(ctx context.Context) ([]Product, error) {
 
 	return products, nil
 }
+
+func (r *Repository) ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error) {
+	var reservation ReservedStock
+	reservation.ProductID = productID
+	reservation.Quantity = quantity
+
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE products
+		SET stock_quantity = stock_quantity - $1
+		WHERE id = $2 AND stock_quantity >= $1
+		RETURNING price_cents
+	`, quantity, productID).Scan(&reservation.UnitPriceCents)
+	if err != nil {
+		return ReservedStock{}, err
+	}
+
+	reservation.SubtotalCents = reservation.UnitPriceCents * reservation.Quantity
+	return reservation, nil
+}

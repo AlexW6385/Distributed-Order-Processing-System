@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "github.com/AlexW6385/Distributed-Order-Processing-System/gen/payment/v1;paymentv1";
+
+service PaymentService {
+  rpc PayOrder(PayOrderRequest) returns (PayOrderResponse);
+}
+
+message PayOrderRequest {
+  string order_id = 1;
+  string idempotency_key = 2;
+  int32 amount_cents = 3;
+}
+
+message Payment {
+  string id = 1;
+  string order_id = 2;
+  string idempotency_key = 3;
+  string status = 4;
+  int32 amount_cents = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+message PayOrderResponse {
+  Payment payment = 1;
+}

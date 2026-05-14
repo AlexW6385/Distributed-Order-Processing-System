@@ -3,7 +3,6 @@ package order
 import (
 	"context"
 	"database/sql"
-	"errors"
 )
 
 type Repository struct {
@@ -14,7 +13,7 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) Create(ctx context.Context, request CreateOrderRequest) (Order, error) {
+func (r *Repository) Create(ctx context.Context, request CreateOrderRequest, reservedItems []ReservedStock) (Order, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Order{}, err
@@ -41,12 +40,9 @@ func (r *Repository) Create(ctx context.Context, request CreateOrderRequest) (Or
 		return Order{}, err
 	}
 
-	for _, requestItem := range request.Items {
-		item, err := createOrderItem(ctx, tx, order.ID, requestItem)
+	for _, reservedItem := range reservedItems {
+		item, err := createOrderItem(ctx, tx, order.ID, reservedItem)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return Order{}, ErrInsufficientStock
-			}
 			return Order{}, err
 		}
 
@@ -98,57 +94,29 @@ func (r *Repository) Find(ctx context.Context, orderID string) (Order, error) {
 	return order, nil
 }
 
-func (r *Repository) Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error) {
+func (r *Repository) MarkPaid(ctx context.Context, orderID string) (Order, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return PaidOrder{}, err
+		return Order{}, err
 	}
 	defer tx.Rollback()
 
-	var paidOrder PaidOrder
+	var order Order
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, customer_email, status, total_cents, created_at, updated_at
 		FROM orders
 		WHERE id = $1
 		FOR UPDATE
 	`, orderID).Scan(
-		&paidOrder.Order.ID,
-		&paidOrder.Order.CustomerEmail,
-		&paidOrder.Order.Status,
-		&paidOrder.Order.TotalCents,
-		&paidOrder.Order.CreatedAt,
-		&paidOrder.Order.UpdatedAt,
+		&order.ID,
+		&order.CustomerEmail,
+		&order.Status,
+		&order.TotalCents,
+		&order.CreatedAt,
+		&order.UpdatedAt,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return PaidOrder{}, ErrNotFound
-		}
-		return PaidOrder{}, err
-	}
-
-	if paidOrder.Order.Status == "paid" {
-		return PaidOrder{}, ErrAlreadyPaid
-	}
-
-	if paidOrder.Order.Status != "pending" {
-		return PaidOrder{}, ErrCannotBePaid
-	}
-
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO payments (order_id, idempotency_key, status, amount_cents)
-		VALUES ($1, $2, 'succeeded', $3)
-		RETURNING id, order_id, idempotency_key, status, amount_cents, created_at, updated_at
-	`, paidOrder.Order.ID, request.IdempotencyKey, paidOrder.Order.TotalCents).Scan(
-		&paidOrder.Payment.ID,
-		&paidOrder.Payment.OrderID,
-		&paidOrder.Payment.IdempotencyKey,
-		&paidOrder.Payment.Status,
-		&paidOrder.Payment.AmountCents,
-		&paidOrder.Payment.CreatedAt,
-		&paidOrder.Payment.UpdatedAt,
-	)
-	if err != nil {
-		return PaidOrder{}, ErrConflict
+		return Order{}, err
 	}
 
 	err = tx.QueryRowContext(ctx, `
@@ -156,44 +124,34 @@ func (r *Repository) Pay(ctx context.Context, orderID string, request PayOrderRe
 		SET status = 'paid'
 		WHERE id = $1
 		RETURNING status, updated_at
-	`, paidOrder.Order.ID).Scan(&paidOrder.Order.Status, &paidOrder.Order.UpdatedAt)
+	`, order.ID).Scan(&order.Status, &order.UpdatedAt)
 	if err != nil {
-		return PaidOrder{}, err
+		return Order{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return PaidOrder{}, err
+		return Order{}, err
 	}
 
-	items, err := r.findItems(ctx, paidOrder.Order.ID)
+	items, err := r.findItems(ctx, order.ID)
 	if err != nil {
-		return PaidOrder{}, err
+		return Order{}, err
 	}
-	paidOrder.Order.Items = items
+	order.Items = items
 
-	return paidOrder, nil
+	return order, nil
 }
 
-func createOrderItem(ctx context.Context, tx *sql.Tx, orderID string, requestItem CreateOrderItemRequest) (OrderItem, error) {
+func createOrderItem(ctx context.Context, tx *sql.Tx, orderID string, reservedItem ReservedStock) (OrderItem, error) {
 	item := OrderItem{
-		OrderID:   orderID,
-		ProductID: requestItem.ProductID,
-		Quantity:  requestItem.Quantity,
+		OrderID:        orderID,
+		ProductID:      reservedItem.ProductID,
+		Quantity:       reservedItem.Quantity,
+		UnitPriceCents: reservedItem.UnitPriceCents,
+		SubtotalCents:  reservedItem.SubtotalCents,
 	}
 
 	err := tx.QueryRowContext(ctx, `
-		UPDATE products
-		SET stock_quantity = stock_quantity - $1
-		WHERE id = $2 AND stock_quantity >= $1
-		RETURNING price_cents
-	`, item.Quantity, item.ProductID).Scan(&item.UnitPriceCents)
-	if err != nil {
-		return OrderItem{}, err
-	}
-
-	item.SubtotalCents = item.Quantity * item.UnitPriceCents
-
-	err = tx.QueryRowContext(ctx, `
 		INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents, subtotal_cents)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, created_at

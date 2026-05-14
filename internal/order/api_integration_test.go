@@ -16,7 +16,11 @@ func TestOrderAPIIntegrationCreateGetPay(t *testing.T) {
 	productID := testutil.InsertProduct(t, db, "api-keyboard", 12999, 3)
 
 	repository := NewRepository(db)
-	service := NewService(repository)
+	service := NewService(
+		repository,
+		WithProductClient(&fakeProductClient{}),
+		WithPaymentClient(&fakePaymentClient{payment: Payment{ID: "payment-api-1"}}),
+	)
 	router := gin.New()
 	NewHandler(service).RegisterRoutes(router)
 

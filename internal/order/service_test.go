@@ -5,26 +5,25 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
-	"time"
 )
 
 type fakeStore struct {
-	createRequest CreateOrderRequest
-	findOrderID   string
-	payOrderID    string
-	payRequest    PayOrderRequest
-	payCalls      int
+	createRequest  CreateOrderRequest
+	createReserved []ReservedStock
+	findOrderID    string
+	payOrderID     string
 
 	createOrder Order
 	createErr   error
 	findOrder   Order
 	findErr     error
-	payResult   PaidOrder
-	payErr      error
+	markPaid    Order
+	markPaidErr error
 }
 
-func (s *fakeStore) Create(ctx context.Context, request CreateOrderRequest) (Order, error) {
+func (s *fakeStore) Create(ctx context.Context, request CreateOrderRequest, reservedItems []ReservedStock) (Order, error) {
 	s.createRequest = request
+	s.createReserved = reservedItems
 	return s.createOrder, s.createErr
 }
 
@@ -33,39 +32,24 @@ func (s *fakeStore) Find(ctx context.Context, orderID string) (Order, error) {
 	return s.findOrder, s.findErr
 }
 
-func (s *fakeStore) Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error) {
-	s.payCalls++
+func (s *fakeStore) MarkPaid(ctx context.Context, orderID string) (Order, error) {
 	s.payOrderID = orderID
-	s.payRequest = request
-	return s.payResult, s.payErr
+	return s.markPaid, s.markPaidErr
 }
 
-type fakeIdempotencyStore struct {
-	reserved     bool
+type fakeProductClient struct {
+	reserveCalls int
 	reserveErr   error
-	reserveKey   string
-	releasedKey  string
-	releaseCalls int
 }
 
-func (s *fakeIdempotencyStore) ReservePayment(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	s.reserveKey = key
-	return s.reserved, s.reserveErr
-}
-
-func (s *fakeIdempotencyStore) ReleasePayment(ctx context.Context, key string) error {
-	s.releaseCalls++
-	s.releasedKey = key
-	return nil
-}
-
-type fakeProductCache struct {
-	deleteCalls int
-}
-
-func (c *fakeProductCache) DeleteProducts(ctx context.Context) error {
-	c.deleteCalls++
-	return nil
+func (c *fakeProductClient) ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error) {
+	c.reserveCalls++
+	return ReservedStock{
+		ProductID:      productID,
+		Quantity:       quantity,
+		UnitPriceCents: 1000,
+		SubtotalCents:  quantity * 1000,
+	}, c.reserveErr
 }
 
 func TestServiceCreateValidatesInput(t *testing.T) {
@@ -115,7 +99,8 @@ func TestServiceCreateValidatesInput(t *testing.T) {
 
 func TestServiceCreateTrimsInputBeforeCallingStore(t *testing.T) {
 	store := &fakeStore{createOrder: Order{ID: "order-1"}}
-	service := NewService(store)
+	productClient := &fakeProductClient{}
+	service := NewService(store, WithProductClient(productClient))
 
 	_, err := service.Create(context.Background(), CreateOrderRequest{
 		CustomerEmail: " alex@example.com ",
@@ -131,23 +116,11 @@ func TestServiceCreateTrimsInputBeforeCallingStore(t *testing.T) {
 	if store.createRequest.Items[0].ProductID != "product-1" {
 		t.Fatalf("expected trimmed product id, got %q", store.createRequest.Items[0].ProductID)
 	}
-}
-
-func TestServiceCreateInvalidatesProductCache(t *testing.T) {
-	store := &fakeStore{createOrder: Order{ID: "order-1"}}
-	productCache := &fakeProductCache{}
-	service := NewService(store, WithProductCache(productCache))
-
-	_, err := service.Create(context.Background(), CreateOrderRequest{
-		CustomerEmail: "alex@example.com",
-		Items:         []CreateOrderItemRequest{{ProductID: "product-1", Quantity: 1}},
-	})
-	if err != nil {
-		t.Fatalf("create order: %v", err)
+	if productClient.reserveCalls != 1 {
+		t.Fatalf("expected product reservation once, got %d", productClient.reserveCalls)
 	}
-
-	if productCache.deleteCalls != 1 {
-		t.Fatalf("expected product cache invalidation once, got %d", productCache.deleteCalls)
+	if len(store.createReserved) != 1 || store.createReserved[0].SubtotalCents != 2000 {
+		t.Fatalf("expected reserved item passed to store, got %+v", store.createReserved)
 	}
 }
 
@@ -182,68 +155,54 @@ func TestServicePayValidatesInput(t *testing.T) {
 	}
 }
 
-func TestServicePayTrimsInputBeforeCallingStore(t *testing.T) {
-	store := &fakeStore{payResult: PaidOrder{Order: Order{ID: "order-1"}}}
-	service := NewService(store)
+type fakePaymentClient struct {
+	orderID        string
+	idempotencyKey string
+	amountCents    int
+	payment        Payment
+	err            error
+}
 
-	_, err := service.Pay(context.Background(), " order-1 ", PayOrderRequest{IdempotencyKey: " payment-1 "})
+func (c *fakePaymentClient) PayOrder(ctx context.Context, orderID string, idempotencyKey string, amountCents int) (Payment, error) {
+	c.orderID = orderID
+	c.idempotencyKey = idempotencyKey
+	c.amountCents = amountCents
+	return c.payment, c.err
+}
+
+func TestServicePayCallsPaymentClientAndMarksOrderPaid(t *testing.T) {
+	store := &fakeStore{
+		findOrder: Order{ID: "order-1", Status: "pending", TotalCents: 12999},
+		markPaid:  Order{ID: "order-1", Status: "paid", TotalCents: 12999},
+	}
+	paymentClient := &fakePaymentClient{payment: Payment{ID: "payment-1"}}
+	service := NewService(store, WithPaymentClient(paymentClient))
+
+	paidOrder, err := service.Pay(context.Background(), " order-1 ", PayOrderRequest{IdempotencyKey: " payment-1 "})
 	if err != nil {
 		t.Fatalf("pay order: %v", err)
 	}
 
-	if store.payOrderID != "order-1" {
-		t.Fatalf("expected trimmed order id, got %q", store.payOrderID)
+	if paymentClient.orderID != "order-1" {
+		t.Fatalf("expected payment order id order-1, got %q", paymentClient.orderID)
 	}
-	if store.payRequest.IdempotencyKey != "payment-1" {
-		t.Fatalf("expected trimmed idempotency key, got %q", store.payRequest.IdempotencyKey)
+	if paymentClient.idempotencyKey != "payment-1" {
+		t.Fatalf("expected idempotency key payment-1, got %q", paymentClient.idempotencyKey)
 	}
-}
-
-func TestServicePayUsesIdempotencyReservation(t *testing.T) {
-	store := &fakeStore{payResult: PaidOrder{Order: Order{ID: "order-1"}}}
-	idempotencyStore := &fakeIdempotencyStore{reserved: true}
-	service := NewService(store, WithIdempotencyStore(idempotencyStore))
-
-	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
-	if err != nil {
-		t.Fatalf("pay order: %v", err)
+	if paymentClient.amountCents != 12999 {
+		t.Fatalf("expected payment amount 12999, got %d", paymentClient.amountCents)
 	}
-
-	if idempotencyStore.reserveKey != "payment-1" {
-		t.Fatalf("expected reserve key payment-1, got %q", idempotencyStore.reserveKey)
-	}
-	if store.payCalls != 1 {
-		t.Fatalf("expected repository pay once, got %d", store.payCalls)
+	if paidOrder.Order.Status != "paid" {
+		t.Fatalf("expected paid order, got %q", paidOrder.Order.Status)
 	}
 }
 
-func TestServicePayRejectsDuplicateIdempotencyKey(t *testing.T) {
-	store := &fakeStore{}
-	idempotencyStore := &fakeIdempotencyStore{reserved: false}
-	service := NewService(store, WithIdempotencyStore(idempotencyStore))
+func TestServicePayRejectsAlreadyPaidOrder(t *testing.T) {
+	store := &fakeStore{findOrder: Order{ID: "order-1", Status: "paid", TotalCents: 12999}}
+	service := NewService(store, WithPaymentClient(&fakePaymentClient{}))
 
 	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected ErrConflict, got %v", err)
-	}
-	if store.payCalls != 0 {
-		t.Fatalf("expected repository pay not to be called, got %d calls", store.payCalls)
-	}
-}
-
-func TestServicePayReleasesReservationOnRepositoryFailure(t *testing.T) {
-	store := &fakeStore{payErr: ErrNotFound}
-	idempotencyStore := &fakeIdempotencyStore{reserved: true}
-	service := NewService(store, WithIdempotencyStore(idempotencyStore))
-
-	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-	if idempotencyStore.releaseCalls != 1 {
-		t.Fatalf("expected reservation release once, got %d", idempotencyStore.releaseCalls)
-	}
-	if idempotencyStore.releasedKey != "payment-1" {
-		t.Fatalf("expected released key payment-1, got %q", idempotencyStore.releasedKey)
+	if !errors.Is(err, ErrAlreadyPaid) {
+		t.Fatalf("expected ErrAlreadyPaid, got %v", err)
 	}
 }

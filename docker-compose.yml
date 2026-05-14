@@ -30,5 +30,62 @@ services:
       timeout: 5s
       retries: 5
 
+  product-service:
+    build:
+      context: .
+      dockerfile: services/product-service/Dockerfile
+    container_name: distributed-order-processing-system-product-service
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
+      REDIS_ADDR: redis:6379
+      GRPC_PORT: 50051
+    ports:
+      - "50051:50051"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: services/payment-service/Dockerfile
+    container_name: distributed-order-processing-system-payment-service
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
+      REDIS_ADDR: redis:6379
+      GRPC_PORT: 50052
+    ports:
+      - "50052:50052"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  order-service:
+    build:
+      context: .
+      dockerfile: services/order-service/Dockerfile
+    container_name: distributed-order-processing-system-order-service
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
+      REDIS_ADDR: redis:6379
+      PRODUCT_SERVICE_ADDR: product-service:50051
+      PAYMENT_SERVICE_ADDR: payment-service:50052
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+
 volumes:
   postgres_data:

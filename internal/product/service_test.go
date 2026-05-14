@@ -16,6 +16,15 @@ func (s *fakeStore) List(ctx context.Context) ([]Product, error) {
 	return s.products, s.err
 }
 
+func (s *fakeStore) ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error) {
+	return ReservedStock{
+		ProductID:      productID,
+		Quantity:       quantity,
+		UnitPriceCents: 1000,
+		SubtotalCents:  quantity * 1000,
+	}, s.err
+}
+
 type fakeCache struct {
 	products    []Product
 	hit         bool

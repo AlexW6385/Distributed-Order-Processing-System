@@ -12,6 +12,13 @@ type CreateOrderItemRequest struct {
 	Quantity  int
 }
 
+type ReservedStock struct {
+	ProductID      string
+	Quantity       int
+	UnitPriceCents int
+	SubtotalCents  int
+}
+
 type PayOrderRequest struct {
 	IdempotencyKey string
 }

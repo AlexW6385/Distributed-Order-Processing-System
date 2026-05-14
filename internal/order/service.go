@@ -5,36 +5,39 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"time"
 )
 
 type Service struct {
-	repository       Store
-	idempotencyStore IdempotencyStore
-	productCache     ProductCache
+	repository    Store
+	productClient ProductClient
+	paymentClient PaymentClient
 }
 
 type Store interface {
-	Create(ctx context.Context, request CreateOrderRequest) (Order, error)
+	Create(ctx context.Context, request CreateOrderRequest, reservedItems []ReservedStock) (Order, error)
 	Find(ctx context.Context, orderID string) (Order, error)
-	Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error)
+	MarkPaid(ctx context.Context, orderID string) (Order, error)
 }
 
-type ProductCache interface {
-	DeleteProducts(ctx context.Context) error
+type ProductClient interface {
+	ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error)
+}
+
+type PaymentClient interface {
+	PayOrder(ctx context.Context, orderID string, idempotencyKey string, amountCents int) (Payment, error)
 }
 
 type Option func(*Service)
 
-func WithIdempotencyStore(store IdempotencyStore) Option {
+func WithProductClient(client ProductClient) Option {
 	return func(service *Service) {
-		service.idempotencyStore = store
+		service.productClient = client
 	}
 }
 
-func WithProductCache(cache ProductCache) Option {
+func WithPaymentClient(client PaymentClient) Option {
 	return func(service *Service) {
-		service.productCache = cache
+		service.paymentClient = client
 	}
 }
 
@@ -59,16 +62,16 @@ func (s *Service) Create(ctx context.Context, request CreateOrderRequest) (Order
 		}
 	}
 
-	createdOrder, err := s.repository.Create(ctx, request)
-	if err != nil {
-		return Order{}, err
+	reservedItems := make([]ReservedStock, 0, len(request.Items))
+	for _, item := range request.Items {
+		reservedStock, err := s.productClient.ReserveStock(ctx, item.ProductID, item.Quantity)
+		if err != nil {
+			return Order{}, err
+		}
+		reservedItems = append(reservedItems, reservedStock)
 	}
 
-	if s.productCache != nil {
-		_ = s.productCache.DeleteProducts(ctx)
-	}
-
-	return createdOrder, nil
+	return s.repository.Create(ctx, request, reservedItems)
 }
 
 func (s *Service) Get(ctx context.Context, orderID string) (Order, error) {
@@ -86,25 +89,31 @@ func (s *Service) Pay(ctx context.Context, orderID string, request PayOrderReque
 		return PaidOrder{}, ErrInvalidInput
 	}
 
-	if s.idempotencyStore == nil {
-		return s.repository.Pay(ctx, orderID, request)
-	}
-
-	reserved, err := s.idempotencyStore.ReservePayment(ctx, request.IdempotencyKey, 24*time.Hour)
+	foundOrder, err := s.Get(ctx, orderID)
 	if err != nil {
 		return PaidOrder{}, err
 	}
-	if !reserved {
-		return PaidOrder{}, ErrConflict
+
+	if foundOrder.Status == "paid" {
+		return PaidOrder{}, ErrAlreadyPaid
 	}
 
-	paidOrder, err := s.repository.Pay(ctx, orderID, request)
+	if foundOrder.Status != "pending" {
+		return PaidOrder{}, ErrCannotBePaid
+	}
+
+	createdPayment, err := s.paymentClient.PayOrder(ctx, foundOrder.ID, request.IdempotencyKey, foundOrder.TotalCents)
 	if err != nil {
-		if !errors.Is(err, ErrAlreadyPaid) && !errors.Is(err, ErrConflict) {
-			_ = s.idempotencyStore.ReleasePayment(ctx, request.IdempotencyKey)
-		}
 		return PaidOrder{}, err
 	}
 
-	return paidOrder, nil
+	paidOrder, err := s.repository.MarkPaid(ctx, foundOrder.ID)
+	if err != nil {
+		return PaidOrder{}, err
+	}
+
+	return PaidOrder{
+		Order:   paidOrder,
+		Payment: createdPayment,
+	}, nil
 }

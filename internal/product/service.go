@@ -9,6 +9,7 @@ type Service struct {
 
 type Store interface {
 	List(ctx context.Context) ([]Product, error)
+	ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error)
 }
 
 func NewService(repository Store, cache ...Cache) *Service {
@@ -36,4 +37,17 @@ func (s *Service) List(ctx context.Context) ([]Product, error) {
 	}
 
 	return products, nil
+}
+
+func (s *Service) ReserveStock(ctx context.Context, productID string, quantity int) (ReservedStock, error) {
+	reservation, err := s.repository.ReserveStock(ctx, productID, quantity)
+	if err != nil {
+		return ReservedStock{}, err
+	}
+
+	if s.cache != nil {
+		_ = s.cache.DeleteProducts(ctx)
+	}
+
+	return reservation, nil
 }
