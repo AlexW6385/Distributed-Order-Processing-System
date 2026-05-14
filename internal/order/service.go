@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 )
 
 type Service struct {
-	repository Store
+	repository       Store
+	idempotencyStore IdempotencyStore
+	productCache     ProductCache
 }
 
 type Store interface {
@@ -17,8 +20,30 @@ type Store interface {
 	Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error)
 }
 
-func NewService(repository Store) *Service {
-	return &Service{repository: repository}
+type ProductCache interface {
+	DeleteProducts(ctx context.Context) error
+}
+
+type Option func(*Service)
+
+func WithIdempotencyStore(store IdempotencyStore) Option {
+	return func(service *Service) {
+		service.idempotencyStore = store
+	}
+}
+
+func WithProductCache(cache ProductCache) Option {
+	return func(service *Service) {
+		service.productCache = cache
+	}
+}
+
+func NewService(repository Store, options ...Option) *Service {
+	service := &Service{repository: repository}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context, request CreateOrderRequest) (Order, error) {
@@ -34,7 +59,16 @@ func (s *Service) Create(ctx context.Context, request CreateOrderRequest) (Order
 		}
 	}
 
-	return s.repository.Create(ctx, request)
+	createdOrder, err := s.repository.Create(ctx, request)
+	if err != nil {
+		return Order{}, err
+	}
+
+	if s.productCache != nil {
+		_ = s.productCache.DeleteProducts(ctx)
+	}
+
+	return createdOrder, nil
 }
 
 func (s *Service) Get(ctx context.Context, orderID string) (Order, error) {
@@ -52,5 +86,25 @@ func (s *Service) Pay(ctx context.Context, orderID string, request PayOrderReque
 		return PaidOrder{}, ErrInvalidInput
 	}
 
-	return s.repository.Pay(ctx, orderID, request)
+	if s.idempotencyStore == nil {
+		return s.repository.Pay(ctx, orderID, request)
+	}
+
+	reserved, err := s.idempotencyStore.ReservePayment(ctx, request.IdempotencyKey, 24*time.Hour)
+	if err != nil {
+		return PaidOrder{}, err
+	}
+	if !reserved {
+		return PaidOrder{}, ErrConflict
+	}
+
+	paidOrder, err := s.repository.Pay(ctx, orderID, request)
+	if err != nil {
+		if !errors.Is(err, ErrAlreadyPaid) && !errors.Is(err, ErrConflict) {
+			_ = s.idempotencyStore.ReleasePayment(ctx, request.IdempotencyKey)
+		}
+		return PaidOrder{}, err
+	}
+
+	return paidOrder, nil
 }

@@ -75,10 +75,16 @@ The default database URL is:
 postgres://postgres:postgres@localhost:5432/distributed_order_processing_system?sslmode=disable
 ```
 
+The default Redis address is:
+
+```text
+localhost:6379
+```
+
 You can override it:
 
 ```bash
-DATABASE_URL='postgres://postgres:postgres@localhost:5432/distributed_order_processing_system?sslmode=disable' PORT=8080 go run .
+DATABASE_URL='postgres://postgres:postgres@localhost:5432/distributed_order_processing_system?sslmode=disable' REDIS_ADDR='localhost:6379' PORT=8080 go run .
 ```
 
 ## Example Requests
@@ -129,7 +135,7 @@ Run unit tests:
 go test ./...
 ```
 
-Database integration tests run only when `TEST_DATABASE_URL` is set. This prevents accidental writes to the development database.
+Database integration tests run only when `TEST_DATABASE_URL` is set. Redis integration tests run only when `TEST_REDIS_ADDR` is set. This prevents accidental writes to the development database or local Redis instance.
 
 Create a local test database:
 
@@ -140,7 +146,7 @@ docker exec distributed-order-processing-system-postgres createdb -U postgres di
 Run the full test suite:
 
 ```bash
-TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/distributed_order_processing_system_test?sslmode=disable' go test ./...
+TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/distributed_order_processing_system_test?sslmode=disable' TEST_REDIS_ADDR='localhost:6379' go test ./...
 ```
 
 The integration test helper applies `migrations/init.sql` and truncates test tables before and after each test run.
@@ -154,4 +160,4 @@ CI checks:
 - Go formatting
 - Unit tests
 - Database integration tests using a temporary Postgres service
-
+- Redis integration tests using a temporary Redis service

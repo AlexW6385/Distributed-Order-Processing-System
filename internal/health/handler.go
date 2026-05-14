@@ -7,14 +7,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 type Handler struct {
-	db *sql.DB
+	db          *sql.DB
+	redisClient *redis.Client
 }
 
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{db: db}
+func NewHandler(db *sql.DB, redisClient *redis.Client) *Handler {
+	return &Handler{
+		db:          db,
+		redisClient: redisClient,
+	}
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
@@ -29,12 +34,19 @@ func (h *Handler) check(c *gin.Context) {
 	response := gin.H{
 		"status":   "ok",
 		"database": "ok",
+		"redis":    "ok",
 	}
 
 	if err := h.db.PingContext(ctx); err != nil {
 		status = http.StatusServiceUnavailable
 		response["status"] = "unhealthy"
 		response["database"] = "unavailable"
+	}
+
+	if err := h.redisClient.Ping(ctx).Err(); err != nil {
+		status = http.StatusServiceUnavailable
+		response["status"] = "unhealthy"
+		response["redis"] = "unavailable"
 	}
 
 	c.JSON(status, response)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/cache"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/config"
 	appdb "github.com/AlexW6385/Distributed-Order-Processing-System/internal/db"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/health"
@@ -22,14 +23,26 @@ func main() {
 	}
 	defer db.Close()
 
+	redisClient, err := cache.OpenRedis(cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("connect redis: %v", err)
+	}
+	defer redisClient.Close()
+
 	productRepository := product.NewRepository(db)
-	productService := product.NewService(productRepository)
+	productCache := product.NewRedisCache(redisClient)
+	productService := product.NewService(productRepository, productCache)
 
 	orderRepository := order.NewRepository(db)
-	orderService := order.NewService(orderRepository)
+	paymentIdempotency := order.NewRedisIdempotencyStore(redisClient)
+	orderService := order.NewService(
+		orderRepository,
+		order.WithIdempotencyStore(paymentIdempotency),
+		order.WithProductCache(productCache),
+	)
 
 	router := gin.Default()
-	health.NewHandler(db).RegisterRoutes(router)
+	health.NewHandler(db, redisClient).RegisterRoutes(router)
 	product.NewHandler(productService).RegisterRoutes(router)
 	order.NewHandler(orderService).RegisterRoutes(router)
 

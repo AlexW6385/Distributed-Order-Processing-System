@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 )
 
 type fakeStore struct {
@@ -12,6 +13,7 @@ type fakeStore struct {
 	findOrderID   string
 	payOrderID    string
 	payRequest    PayOrderRequest
+	payCalls      int
 
 	createOrder Order
 	createErr   error
@@ -32,9 +34,38 @@ func (s *fakeStore) Find(ctx context.Context, orderID string) (Order, error) {
 }
 
 func (s *fakeStore) Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error) {
+	s.payCalls++
 	s.payOrderID = orderID
 	s.payRequest = request
 	return s.payResult, s.payErr
+}
+
+type fakeIdempotencyStore struct {
+	reserved     bool
+	reserveErr   error
+	reserveKey   string
+	releasedKey  string
+	releaseCalls int
+}
+
+func (s *fakeIdempotencyStore) ReservePayment(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	s.reserveKey = key
+	return s.reserved, s.reserveErr
+}
+
+func (s *fakeIdempotencyStore) ReleasePayment(ctx context.Context, key string) error {
+	s.releaseCalls++
+	s.releasedKey = key
+	return nil
+}
+
+type fakeProductCache struct {
+	deleteCalls int
+}
+
+func (c *fakeProductCache) DeleteProducts(ctx context.Context) error {
+	c.deleteCalls++
+	return nil
 }
 
 func TestServiceCreateValidatesInput(t *testing.T) {
@@ -102,6 +133,24 @@ func TestServiceCreateTrimsInputBeforeCallingStore(t *testing.T) {
 	}
 }
 
+func TestServiceCreateInvalidatesProductCache(t *testing.T) {
+	store := &fakeStore{createOrder: Order{ID: "order-1"}}
+	productCache := &fakeProductCache{}
+	service := NewService(store, WithProductCache(productCache))
+
+	_, err := service.Create(context.Background(), CreateOrderRequest{
+		CustomerEmail: "alex@example.com",
+		Items:         []CreateOrderItemRequest{{ProductID: "product-1", Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	if productCache.deleteCalls != 1 {
+		t.Fatalf("expected product cache invalidation once, got %d", productCache.deleteCalls)
+	}
+}
+
 func TestServiceGetMapsMissingOrder(t *testing.T) {
 	service := NewService(&fakeStore{findErr: sql.ErrNoRows})
 
@@ -147,5 +196,54 @@ func TestServicePayTrimsInputBeforeCallingStore(t *testing.T) {
 	}
 	if store.payRequest.IdempotencyKey != "payment-1" {
 		t.Fatalf("expected trimmed idempotency key, got %q", store.payRequest.IdempotencyKey)
+	}
+}
+
+func TestServicePayUsesIdempotencyReservation(t *testing.T) {
+	store := &fakeStore{payResult: PaidOrder{Order: Order{ID: "order-1"}}}
+	idempotencyStore := &fakeIdempotencyStore{reserved: true}
+	service := NewService(store, WithIdempotencyStore(idempotencyStore))
+
+	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
+	if err != nil {
+		t.Fatalf("pay order: %v", err)
+	}
+
+	if idempotencyStore.reserveKey != "payment-1" {
+		t.Fatalf("expected reserve key payment-1, got %q", idempotencyStore.reserveKey)
+	}
+	if store.payCalls != 1 {
+		t.Fatalf("expected repository pay once, got %d", store.payCalls)
+	}
+}
+
+func TestServicePayRejectsDuplicateIdempotencyKey(t *testing.T) {
+	store := &fakeStore{}
+	idempotencyStore := &fakeIdempotencyStore{reserved: false}
+	service := NewService(store, WithIdempotencyStore(idempotencyStore))
+
+	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict, got %v", err)
+	}
+	if store.payCalls != 0 {
+		t.Fatalf("expected repository pay not to be called, got %d calls", store.payCalls)
+	}
+}
+
+func TestServicePayReleasesReservationOnRepositoryFailure(t *testing.T) {
+	store := &fakeStore{payErr: ErrNotFound}
+	idempotencyStore := &fakeIdempotencyStore{reserved: true}
+	service := NewService(store, WithIdempotencyStore(idempotencyStore))
+
+	_, err := service.Pay(context.Background(), "order-1", PayOrderRequest{IdempotencyKey: "payment-1"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if idempotencyStore.releaseCalls != 1 {
+		t.Fatalf("expected reservation release once, got %d", idempotencyStore.releaseCalls)
+	}
+	if idempotencyStore.releasedKey != "payment-1" {
+		t.Fatalf("expected released key payment-1, got %q", idempotencyStore.releasedKey)
 	}
 }
