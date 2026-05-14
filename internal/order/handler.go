@@ -1,6 +1,7 @@
 package order
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -8,10 +9,16 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service OrderService
 }
 
-func NewHandler(service *Service) *Handler {
+type OrderService interface {
+	Create(ctx context.Context, request CreateOrderRequest) (Order, error)
+	Get(ctx context.Context, orderID string) (Order, error)
+	Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error)
+}
+
+func NewHandler(service OrderService) *Handler {
 	return &Handler{service: service}
 }
 

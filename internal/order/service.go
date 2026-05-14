@@ -8,10 +8,16 @@ import (
 )
 
 type Service struct {
-	repository *Repository
+	repository Store
 }
 
-func NewService(repository *Repository) *Service {
+type Store interface {
+	Create(ctx context.Context, request CreateOrderRequest) (Order, error)
+	Find(ctx context.Context, orderID string) (Order, error)
+	Pay(ctx context.Context, orderID string, request PayOrderRequest) (PaidOrder, error)
+}
+
+func NewService(repository Store) *Service {
 	return &Service{repository: repository}
 }
 

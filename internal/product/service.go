@@ -3,10 +3,14 @@ package product
 import "context"
 
 type Service struct {
-	repository *Repository
+	repository Store
 }
 
-func NewService(repository *Repository) *Service {
+type Store interface {
+	List(ctx context.Context) ([]Product, error)
+}
+
+func NewService(repository Store) *Service {
 	return &Service{repository: repository}
 }
 

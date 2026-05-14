@@ -1,16 +1,21 @@
 package product
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
-	service *Service
+	service ProductService
 }
 
-func NewHandler(service *Service) *Handler {
+type ProductService interface {
+	List(ctx context.Context) ([]Product, error)
+}
+
+func NewHandler(service ProductService) *Handler {
 	return &Handler{service: service}
 }
 
