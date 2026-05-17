@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+
+postgres_data/
+*.log
+.DS_Store
