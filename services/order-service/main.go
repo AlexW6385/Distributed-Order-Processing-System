@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	paymentv1 "github.com/AlexW6385/Distributed-Order-Processing-System/gen/payment/v1"
@@ -10,7 +13,9 @@ import (
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/cache"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/config"
 	appdb "github.com/AlexW6385/Distributed-Order-Processing-System/internal/db"
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/events"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/health"
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/observability"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/order"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/product"
 	"github.com/gin-gonic/gin"
@@ -19,6 +24,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	cfg := config.Load()
 
 	db, err := appdb.Open(cfg.DatabaseURL)
@@ -33,13 +39,21 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	productConn, err := grpc.NewClient(cfg.ProductServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	productConn, err := grpc.NewClient(
+		cfg.ProductServiceAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(observability.UnaryClientInterceptor("order-service")),
+	)
 	if err != nil {
 		log.Fatalf("connect product-service: %v", err)
 	}
 	defer productConn.Close()
 
-	paymentConn, err := grpc.NewClient(cfg.PaymentServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	paymentConn, err := grpc.NewClient(
+		cfg.PaymentServiceAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(observability.UnaryClientInterceptor("order-service")),
+	)
 	if err != nil {
 		log.Fatalf("connect payment-service: %v", err)
 	}
@@ -53,15 +67,27 @@ func main() {
 	orderPaymentClient := order.NewPaymentGRPCClient(paymentGRPCClient)
 
 	orderRepository := order.NewRepository(db)
-	orderService := order.NewService(
-		orderRepository,
+	orderOptions := []order.Option{
 		order.WithProductClient(orderProductClient),
 		order.WithPaymentClient(orderPaymentClient),
-	)
+	}
+	if len(cfg.KafkaBrokers) > 0 {
+		if err := events.EnsureTopic(context.Background(), cfg.KafkaBrokers, cfg.OrderPaidTopic); err != nil {
+			log.Fatalf("ensure kafka topic: %v", err)
+		}
+		orderPaidPublisher := events.NewKafkaOrderPaidPublisher(cfg.KafkaBrokers, cfg.OrderPaidTopic)
+		defer orderPaidPublisher.Close()
 
-	router := gin.Default()
+		outboxRepository := events.NewOutboxRepository(db)
+		outboxPublisher := events.NewOutboxPublisher(outboxRepository, orderPaidPublisher, 2*time.Second, 10)
+		go outboxPublisher.Run(context.Background())
+	}
+	orderService := order.NewService(orderRepository, orderOptions...)
+
+	router := gin.New()
+	router.Use(gin.Recovery(), observability.HTTPMiddleware("order-service"))
 	health.NewHandler(db, redisClient).RegisterRoutes(router)
-	product.NewHandler(productHTTPClient).RegisterRoutes(router)
+	newProductHTTPHandler(productHTTPClient).registerRoutes(router)
 	order.NewHandler(orderService).RegisterRoutes(router)
 
 	server := &http.Server{
@@ -70,7 +96,7 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("order-service listening on :%s", cfg.Port)
+	slog.Info("order-service listening", slog.String("port", cfg.Port))
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen and serve: %v", err)
 	}

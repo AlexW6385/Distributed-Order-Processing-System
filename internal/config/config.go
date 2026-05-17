@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	DatabaseURL        string
@@ -9,6 +12,9 @@ type Config struct {
 	GRPCPort           string
 	ProductServiceAddr string
 	PaymentServiceAddr string
+	KafkaBrokers       []string
+	OrderPaidTopic     string
+	NotificationGroup  string
 }
 
 func Load() Config {
@@ -19,6 +25,9 @@ func Load() Config {
 		GRPCPort:           getenv("GRPC_PORT", "50051"),
 		ProductServiceAddr: getenv("PRODUCT_SERVICE_ADDR", "localhost:50051"),
 		PaymentServiceAddr: getenv("PAYMENT_SERVICE_ADDR", "localhost:50052"),
+		KafkaBrokers:       splitCSV(getenv("KAFKA_BROKERS", "")),
+		OrderPaidTopic:     getenv("ORDER_PAID_TOPIC", "order.paid"),
+		NotificationGroup:  getenv("NOTIFICATION_GROUP", "notification-service"),
 	}
 }
 
@@ -28,4 +37,16 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			values = append(values, part)
+		}
+	}
+	return values
 }

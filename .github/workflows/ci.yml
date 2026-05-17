@@ -54,4 +54,4 @@ jobs:
         run: go test -p 1 ./...
 
       - name: Build service images
-        run: docker compose build order-service product-service payment-service
+        run: docker compose build order-service product-service payment-service notification-service

@@ -3,7 +3,9 @@ package order
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/events"
 	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/testutil"
 )
 
@@ -52,12 +54,22 @@ func TestRepositoryMarkPaidMarksOrderPaid(t *testing.T) {
 		t.Fatalf("create order: %v", err)
 	}
 
-	paidOrder, err := repository.MarkPaid(context.Background(), createdOrder.ID)
+	paidOrder, err := repository.MarkPaid(context.Background(), createdOrder.ID, events.OrderPaidEvent{
+		EventID:       "event-1",
+		OrderID:       createdOrder.ID,
+		PaymentID:     "payment-1",
+		CustomerEmail: "alex@example.com",
+		AmountCents:   21999,
+		PaidAt:        time.Now(),
+	})
 	if err != nil {
 		t.Fatalf("pay order: %v", err)
 	}
 
 	if paidOrder.Status != "paid" {
 		t.Fatalf("expected paid order, got %q", paidOrder.Status)
+	}
+	if count := testutil.CountRows(t, db, "outbox_events"); count != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", count)
 	}
 }

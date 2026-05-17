@@ -3,6 +3,9 @@ package order
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/events"
 )
 
 type Repository struct {
@@ -94,7 +97,7 @@ func (r *Repository) Find(ctx context.Context, orderID string) (Order, error) {
 	return order, nil
 }
 
-func (r *Repository) MarkPaid(ctx context.Context, orderID string) (Order, error) {
+func (r *Repository) MarkPaid(ctx context.Context, orderID string, event events.OrderPaidEvent) (Order, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Order{}, err
@@ -126,6 +129,10 @@ func (r *Repository) MarkPaid(ctx context.Context, orderID string) (Order, error
 		RETURNING status, updated_at
 	`, order.ID).Scan(&order.Status, &order.UpdatedAt)
 	if err != nil {
+		return Order{}, err
+	}
+
+	if err := createOutboxEvent(ctx, tx, order.ID, event); err != nil {
 		return Order{}, err
 	}
 
@@ -164,6 +171,19 @@ func createOrderItem(ctx context.Context, tx *sql.Tx, orderID string, reservedIt
 	}
 
 	return item, nil
+}
+
+func createOutboxEvent(ctx context.Context, tx *sql.Tx, orderID string, event events.OrderPaidEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		VALUES ('order', $1, $2, $3)
+	`, orderID, events.OrderPaidEventType, payload)
+	return err
 }
 
 func (r *Repository) findItems(ctx context.Context, orderID string) ([]OrderItem, error) {

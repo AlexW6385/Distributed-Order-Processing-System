@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/events"
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -16,7 +19,7 @@ type Service struct {
 type Store interface {
 	Create(ctx context.Context, request CreateOrderRequest, reservedItems []ReservedStock) (Order, error)
 	Find(ctx context.Context, orderID string) (Order, error)
-	MarkPaid(ctx context.Context, orderID string) (Order, error)
+	MarkPaid(ctx context.Context, orderID string, event events.OrderPaidEvent) (Order, error)
 }
 
 type ProductClient interface {
@@ -107,7 +110,16 @@ func (s *Service) Pay(ctx context.Context, orderID string, request PayOrderReque
 		return PaidOrder{}, err
 	}
 
-	paidOrder, err := s.repository.MarkPaid(ctx, foundOrder.ID)
+	orderPaidEvent := events.OrderPaidEvent{
+		EventID:       uuid.NewString(),
+		OrderID:       foundOrder.ID,
+		PaymentID:     createdPayment.ID,
+		CustomerEmail: foundOrder.CustomerEmail,
+		AmountCents:   foundOrder.TotalCents,
+		PaidAt:        createdPayment.CreatedAt,
+	}
+
+	paidOrder, err := s.repository.MarkPaid(ctx, foundOrder.ID, orderPaidEvent)
 	if err != nil {
 		return PaidOrder{}, err
 	}

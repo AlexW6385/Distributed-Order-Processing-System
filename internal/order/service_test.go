@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/events"
 )
 
 type fakeStore struct {
@@ -13,12 +15,13 @@ type fakeStore struct {
 	findOrderID    string
 	payOrderID     string
 
-	createOrder Order
-	createErr   error
-	findOrder   Order
-	findErr     error
-	markPaid    Order
-	markPaidErr error
+	createOrder   Order
+	createErr     error
+	findOrder     Order
+	findErr       error
+	markPaid      Order
+	markPaidErr   error
+	markPaidEvent events.OrderPaidEvent
 }
 
 func (s *fakeStore) Create(ctx context.Context, request CreateOrderRequest, reservedItems []ReservedStock) (Order, error) {
@@ -32,8 +35,9 @@ func (s *fakeStore) Find(ctx context.Context, orderID string) (Order, error) {
 	return s.findOrder, s.findErr
 }
 
-func (s *fakeStore) MarkPaid(ctx context.Context, orderID string) (Order, error) {
+func (s *fakeStore) MarkPaid(ctx context.Context, orderID string, event events.OrderPaidEvent) (Order, error) {
 	s.payOrderID = orderID
+	s.markPaidEvent = event
 	return s.markPaid, s.markPaidErr
 }
 
@@ -176,7 +180,10 @@ func TestServicePayCallsPaymentClientAndMarksOrderPaid(t *testing.T) {
 		markPaid:  Order{ID: "order-1", Status: "paid", TotalCents: 12999},
 	}
 	paymentClient := &fakePaymentClient{payment: Payment{ID: "payment-1"}}
-	service := NewService(store, WithPaymentClient(paymentClient))
+	service := NewService(
+		store,
+		WithPaymentClient(paymentClient),
+	)
 
 	paidOrder, err := service.Pay(context.Background(), " order-1 ", PayOrderRequest{IdempotencyKey: " payment-1 "})
 	if err != nil {
@@ -194,6 +201,12 @@ func TestServicePayCallsPaymentClientAndMarksOrderPaid(t *testing.T) {
 	}
 	if paidOrder.Order.Status != "paid" {
 		t.Fatalf("expected paid order, got %q", paidOrder.Order.Status)
+	}
+	if store.markPaidEvent.OrderID != "order-1" {
+		t.Fatalf("expected order paid event for order-1, got %+v", store.markPaidEvent)
+	}
+	if store.markPaidEvent.PaymentID != "payment-1" {
+		t.Fatalf("expected payment id payment-1, got %q", store.markPaidEvent.PaymentID)
 	}
 }
 

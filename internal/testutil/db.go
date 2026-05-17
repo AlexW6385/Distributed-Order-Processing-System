@@ -86,7 +86,7 @@ func cleanTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	_, err := db.Exec(`
-		TRUNCATE TABLE payments, order_items, orders, products RESTART IDENTITY CASCADE
+		TRUNCATE TABLE outbox_events, payments, order_items, orders, products RESTART IDENTITY CASCADE
 	`)
 	if err != nil {
 		t.Fatalf("clean tables: %v", err)

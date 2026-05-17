@@ -1,4 +1,4 @@
-package product
+package main
 
 import (
 	"context"
@@ -8,21 +8,22 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/AlexW6385/Distributed-Order-Processing-System/internal/product"
 	"github.com/gin-gonic/gin"
 )
 
-type fakeProductService struct {
-	products []Product
+type fakeProductListService struct {
+	products []product.Product
 	err      error
 }
 
-func (s *fakeProductService) List(ctx context.Context) ([]Product, error) {
+func (s *fakeProductListService) List(ctx context.Context) ([]product.Product, error) {
 	return s.products, s.err
 }
 
-func TestHandlerListProductsReturnsProducts(t *testing.T) {
-	router := productTestRouter(&fakeProductService{
-		products: []Product{{ID: "product-1", SKU: "keyboard-001", Name: "Keyboard"}},
+func TestProductHTTPHandlerListProductsReturnsProducts(t *testing.T) {
+	router := productTestRouter(&fakeProductListService{
+		products: []product.Product{{ID: "product-1", SKU: "keyboard-001", Name: "Keyboard"}},
 	})
 
 	response := httptest.NewRecorder()
@@ -35,7 +36,7 @@ func TestHandlerListProductsReturnsProducts(t *testing.T) {
 	}
 
 	var payload struct {
-		Products []Product `json:"products"`
+		Products []product.Product `json:"products"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -45,8 +46,8 @@ func TestHandlerListProductsReturnsProducts(t *testing.T) {
 	}
 }
 
-func TestHandlerListProductsReturnsServerError(t *testing.T) {
-	router := productTestRouter(&fakeProductService{err: errors.New("database unavailable")})
+func TestProductHTTPHandlerListProductsReturnsServerError(t *testing.T) {
+	router := productTestRouter(&fakeProductListService{err: errors.New("database unavailable")})
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/products", nil)
@@ -58,9 +59,9 @@ func TestHandlerListProductsReturnsServerError(t *testing.T) {
 	}
 }
 
-func productTestRouter(service ProductService) *gin.Engine {
+func productTestRouter(service productListService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewHandler(service).RegisterRoutes(router)
+	newProductHTTPHandler(service).registerRoutes(router)
 	return router
 }
