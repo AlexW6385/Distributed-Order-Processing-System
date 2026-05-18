@@ -4,6 +4,9 @@ set -eu
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+PATH="$HOME/go/bin:$PATH"
+export PATH
+
 mkdir -p gen
 
 protoc \

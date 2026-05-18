@@ -6,11 +6,35 @@ on:
   pull_request:
 
 jobs:
-  test:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - run: go test ./...
+          cache: true
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protobuf Go plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.35.2
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+
+      - name: Check formatting
+        run: |
+          test -z "$(gofmt -l $(find . -path './.git' -prune -o -name '*.go' -print))"
+
+      - name: Verify generated protobuf files
+        run: |
+          make proto
+          git diff --exit-code -- proto gen
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Validate Docker Compose config
+        run: docker compose config >/tmp/docker-compose-config.yml
