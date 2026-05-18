@@ -52,6 +52,13 @@ make up
 
 The API gateway listens on `http://localhost:8080`.
 
+The gateway applies a small per-IP rate limit by default. You can tune it with:
+
+```bash
+RATE_LIMIT_RPS=2
+RATE_LIMIT_BURST=10
+```
+
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/products

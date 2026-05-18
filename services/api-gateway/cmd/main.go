@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"time"
 
 	orderv1 "github.com/AlexW6385/Distributed-Order-Processing-System/gen/order/v1"
 	productv1 "github.com/AlexW6385/Distributed-Order-Processing-System/gen/product/v1"
@@ -32,6 +34,11 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(httpapi.RateLimit(httpapi.RateLimitConfig{
+		RequestsPerSecond: configFloat("RATE_LIMIT_RPS", 2),
+		Burst:             configInt("RATE_LIMIT_BURST", 10),
+		IdleTTL:           10 * time.Minute,
+	}))
 	httpapi.New(orderv1.NewOrderServiceClient(orderConn), productv1.NewProductServiceClient(productConn)).Register(router)
 
 	addr := fmt.Sprintf(":%s", config.String("API_GATEWAY_PORT", "8080"))
@@ -39,4 +46,28 @@ func main() {
 	if err := router.Run(addr); err != nil {
 		log.Error("http server stopped", err, nil)
 	}
+}
+
+func configFloat(key string, fallback float64) float64 {
+	raw := config.String(key, "")
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func configInt(key string, fallback int) int {
+	raw := config.String(key, "")
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
