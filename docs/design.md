@@ -15,3 +15,8 @@ Postgres is one local database container, but tables are owned by services:
 Other services should treat a service-owned table as private, even though local Docker Compose uses one Postgres instance for convenience.
 
 Kafka is shared infrastructure. The order service writes important events to its own outbox table first, then a publisher sends them to Kafka. This avoids losing the notification event after the order has already been marked paid.
+
+Redis is used in two places:
+
+- payment-service uses Redis `SETNX` as a short-lived processing lock for payment idempotency keys.
+- product-service uses Redis as a cache-aside store for product listing reads. Product stock changes delete the product list cache so the next read refreshes from Postgres.

@@ -40,9 +40,11 @@ services:
       dockerfile: services/product-service/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      REDIS_ADDR: ${REDIS_ADDR}
       PRODUCT_GRPC_PORT: 50052
     depends_on:
       - postgres
+      - redis
     restart: unless-stopped
 
   payment-service:

@@ -1,6 +1,6 @@
 # Distributed Order Processing System
 
-A small order-processing system designed as separate services with a single HTTP gateway, internal gRPC communication, service-owned database tables, Redis idempotency, Kafka notifications, and an order outbox.
+A small order-processing system designed as separate services with a single HTTP gateway, internal gRPC communication, service-owned database tables, Redis idempotency and product caching, Kafka notifications, and an order outbox.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ notification-service
 
 - `api-gateway`: public HTTP API. It translates JSON requests into gRPC calls and does not own business logic.
 - `order-service`: owns order workflow, order tables, order items, and the outbox table.
-- `product-service`: owns products, stock, and stock reservations.
+- `product-service`: owns products, stock, stock reservations, and Redis-backed product list caching.
 - `payment-service`: owns payments and Redis-backed idempotency keys.
 - `notification-service`: consumes Kafka `order.paid` events and handles notification side effects.
 
@@ -85,6 +85,7 @@ curl -X POST http://localhost:8080/orders/{order_id}/pay \
 - The gateway is the only public service in Docker Compose.
 - The services communicate internally through protobuf/gRPC.
 - Product stock is reserved before an order becomes payable.
+- Product listing uses Redis cache-aside reads and invalidates the cache when stock reservations change inventory.
 - If payment fails, the order service releases the stock reservation and marks the order failed.
 - When payment succeeds, the order service updates its own database and writes an `order.paid` outbox event in the same transaction.
 - A background publisher sends pending outbox events to Kafka.

@@ -62,9 +62,12 @@ services:
     container_name: distributed-order-product-service
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://orders:orders@postgres:5432/orders?sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       PRODUCT_GRPC_PORT: 50052
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   payment-service:
