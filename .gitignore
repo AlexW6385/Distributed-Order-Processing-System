@@ -1,7 +1,5 @@
 .env
-.env.*
-!.env.example
-
-postgres_data/
-*.log
 .DS_Store
+bin/
+coverage.out
+tmp/

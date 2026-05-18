@@ -1,5 +1,4 @@
 .git
-.github
-postgres_data
-*.log
-.DS_Store
+.env
+bin
+tmp

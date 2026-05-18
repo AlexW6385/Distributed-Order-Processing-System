@@ -1,15 +1,14 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env sh
+set -eu
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT_DIR"
 
-export PATH="$(go env GOPATH)/bin:${PATH}"
+mkdir -p gen
 
 protoc \
-  --proto_path="${ROOT_DIR}/proto" \
-  --go_out="${ROOT_DIR}/gen" \
-  --go_opt=paths=source_relative \
-  --go-grpc_out="${ROOT_DIR}/gen" \
-  --go-grpc_opt=paths=source_relative \
-  "${ROOT_DIR}/proto/product/v1/product.proto" \
-  "${ROOT_DIR}/proto/payment/v1/payment.proto"
+  --go_out=. --go_opt=module=github.com/AlexW6385/Distributed-Order-Processing-System \
+  --go-grpc_out=. --go-grpc_opt=module=github.com/AlexW6385/Distributed-Order-Processing-System \
+  proto/product/v1/product.proto \
+  proto/payment/v1/payment.proto \
+  proto/order/v1/order.proto

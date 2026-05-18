@@ -1,87 +1,81 @@
-name: distributed-order-processing-system
-
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: distributed-order-processing-system-postgres
+    container_name: distributed-order-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: distributed_order_processing_system
+      POSTGRES_USER: ${POSTGRES_USER:-orders}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orders}
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./services/product-service/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_product.sql:ro
+      - ./services/order-service/migrations/001_init.sql:/docker-entrypoint-initdb.d/002_order.sql:ro
+      - ./services/payment-service/migrations/001_init.sql:/docker-entrypoint-initdb.d/003_payment.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d distributed_order_processing_system"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orders} -d ${POSTGRES_DB:-orders}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: distributed-order-processing-system-redis
+    container_name: distributed-order-redis
     ports:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   kafka:
-    image: apache/kafka:3.9.1
-    container_name: distributed-order-processing-system-kafka
+    image: apache/kafka:3.7.0
+    container_name: distributed-order-kafka
+    ports:
+      - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    ports:
-      - "9092:9092"
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
-      interval: 5s
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 10s
       timeout: 10s
-      retries: 10
+      retries: 12
 
   product-service:
     build:
       context: .
       dockerfile: services/product-service/Dockerfile
-    container_name: distributed-order-processing-system-product-service
+    container_name: distributed-order-product-service
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
-      REDIS_ADDR: redis:6379
-      GRPC_PORT: 50051
-    ports:
-      - "50051:50051"
+      DATABASE_URL: ${DATABASE_URL:-postgres://orders:orders@postgres:5432/orders?sslmode=disable}
+      PRODUCT_GRPC_PORT: 50052
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   payment-service:
     build:
       context: .
       dockerfile: services/payment-service/Dockerfile
-    container_name: distributed-order-processing-system-payment-service
+    container_name: distributed-order-payment-service
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
-      REDIS_ADDR: redis:6379
-      GRPC_PORT: 50052
-    ports:
-      - "50052:50052"
+      DATABASE_URL: ${DATABASE_URL:-postgres://orders:orders@postgres:5432/orders?sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      PAYMENT_GRPC_PORT: 50053
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,41 +86,53 @@ services:
     build:
       context: .
       dockerfile: services/order-service/Dockerfile
-    container_name: distributed-order-processing-system-order-service
+    container_name: distributed-order-order-service
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/distributed_order_processing_system?sslmode=disable
-      REDIS_ADDR: redis:6379
-      KAFKA_BROKERS: kafka:9092
-      ORDER_PAID_TOPIC: order.paid
-      PRODUCT_SERVICE_ADDR: product-service:50051
-      PAYMENT_SERVICE_ADDR: payment-service:50052
-      PORT: 8080
-    ports:
-      - "8080:8080"
+      DATABASE_URL: ${DATABASE_URL:-postgres://orders:orders@postgres:5432/orders?sslmode=disable}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      ORDER_PAID_TOPIC: ${ORDER_PAID_TOPIC:-order.paid}
+      PRODUCT_GRPC_ADDR: ${PRODUCT_GRPC_ADDR:-product-service:50052}
+      PAYMENT_GRPC_ADDR: ${PAYMENT_GRPC_ADDR:-payment-service:50053}
+      ORDER_GRPC_PORT: 50051
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      kafka:
         condition: service_healthy
       product-service:
         condition: service_started
       payment-service:
         condition: service_started
-      kafka:
-        condition: service_healthy
 
   notification-service:
     build:
       context: .
       dockerfile: services/notification-service/Dockerfile
-    container_name: distributed-order-processing-system-notification-service
+    container_name: distributed-order-notification-service
     environment:
-      KAFKA_BROKERS: kafka:9092
-      ORDER_PAID_TOPIC: order.paid
-      NOTIFICATION_GROUP: notification-service
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      ORDER_PAID_TOPIC: ${ORDER_PAID_TOPIC:-order.paid}
+      NOTIFICATION_GROUP_ID: notification-service
     depends_on:
       kafka:
         condition: service_healthy
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: distributed-order-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      API_GATEWAY_PORT: 8080
+      ORDER_GRPC_ADDR: ${ORDER_GRPC_ADDR:-order-service:50051}
+      PRODUCT_GRPC_ADDR: ${PRODUCT_GRPC_ADDR:-product-service:50052}
+    depends_on:
+      order-service:
+        condition: service_started
+      product-service:
+        condition: service_started
 
 volumes:
   postgres_data:
